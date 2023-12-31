@@ -2,6 +2,6 @@
 
 **Note** This library doesn't handle routing
 
-### Usage
+## Usage
 
 Check out `example` directory!

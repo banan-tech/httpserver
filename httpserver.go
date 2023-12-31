@@ -3,7 +3,7 @@ package httpserver
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,13 +12,15 @@ import (
 
 type Server struct {
 	shutdownTimeout time.Duration
+	port            uint
 
 	HTTPServer *http.Server
-	log        *log.Logger
+	log        *slog.Logger
 }
 
 func New(port uint, handler http.Handler, options ...Option) *Server {
 	srv := &Server{
+		port: port,
 		HTTPServer: &http.Server{
 			Addr:    fmt.Sprintf(":%d", port),
 			Handler: handler,
@@ -38,7 +40,7 @@ func New(port uint, handler http.Handler, options ...Option) *Server {
 }
 
 func (s *Server) Run() error {
-	s.log.Printf("Starting HTTP server http://0.0.0.0:%s", s.HTTPServer.Addr[1:])
+	s.log.Info(fmt.Sprintf("Starting HTTP server http://0.0.0.0:%d", s.port), "port", s.port)
 
 	shutdownContext, doShutdown := context.WithCancel(context.Background())
 	defer doShutdown()
@@ -62,11 +64,11 @@ func (s *Server) ensureGracefulShutdown(shutdownContext context.Context, doShutd
 	defer doCancel()
 
 	// We received an interrupt signal, shut down.
-	s.log.Println("Shutting down ..")
+	s.log.Info("Shutting down ..")
 	s.HTTPServer.SetKeepAlivesEnabled(false)
 	if err := s.HTTPServer.Shutdown(timeoutContext); err != nil {
 		// Error from closing listeners, or context timeout:
-		s.log.Println(err)
+		s.log.Error("closing server", "error", err)
 	}
 	doShutdown()
 }

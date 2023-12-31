@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -24,15 +24,15 @@ func nextRequestID() string {
 }
 
 func main() {
-	httpLogger := log.New(os.Stdout, "[http] ", log.Lmsgprefix|log.Ldate|log.Lmicroseconds)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	mw := logging(httpLogger)(handler)
+	mw := logging(slog.Default())(handler)
 	mw = tracing(nextRequestID)(mw)
 
-	server := httpserver.New(3000, mw, httpserver.WithLogger(httpLogger), customOption())
+	server := httpserver.New(3000, mw, httpserver.WithLogger(slog.Default()), customOption())
 
 	if err := server.Run(); err != nil {
-		httpLogger.Fatal(err)
+		slog.Error("server error", "error", err)
 	}
 }
 
@@ -42,7 +42,7 @@ func customOption() httpserver.Option {
 	}
 }
 
-func logging(logger *log.Logger) func(http.Handler) http.Handler {
+func logging(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
@@ -50,7 +50,12 @@ func logging(logger *log.Logger) func(http.Handler) http.Handler {
 				if !ok {
 					requestID = "unknown"
 				}
-				logger.Println(requestID, r.Method, r.URL.Path, r.RemoteAddr, r.UserAgent())
+				logger.InfoContext(r.Context(), "",
+					"request_id", requestID,
+					"method", r.Method,
+					"path", r.URL.Path,
+					"remote_addr", r.RemoteAddr,
+					"user_agent", r.UserAgent())
 			}()
 			next.ServeHTTP(w, r)
 		})

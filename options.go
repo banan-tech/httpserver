@@ -1,8 +1,7 @@
 package httpserver
 
 import (
-	"log"
-	"os"
+	"log/slog"
 	"time"
 )
 
@@ -11,14 +10,13 @@ const defaultShutdownTimeout = 10 * time.Second
 type Option func(*Server)
 
 func setDefaultLogger(server *Server) {
-	logger := log.New(os.Stdout, "[http] ", log.Lmsgprefix|log.Ldate|log.Lmicroseconds)
-	WithLogger(logger)(server)
+	WithLogger(slog.Default().WithGroup("httpserver"))(server)
 }
 
 // WithLogger configures error and server logger
-func WithLogger(logger *log.Logger) Option {
+func WithLogger(logger *slog.Logger) Option {
 	return func(server *Server) {
-		server.HTTPServer.ErrorLog = logger
+		server.HTTPServer.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelError)
 		server.log = logger
 	}
 }
