@@ -29,7 +29,7 @@ func main() {
 	mw := logging(slog.Default())(handler)
 	mw = tracing(nextRequestID)(mw)
 
-	server := httpserver.New(3000, mw, httpserver.WithLogger(slog.Default()), customOption())
+	server := httpserver.New("", 3000, mw, httpserver.WithLogger(slog.Default()), customOption())
 
 	if err := server.Run(); err != nil {
 		slog.Error("server error", "error", err)

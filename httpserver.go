@@ -13,16 +13,22 @@ import (
 type Server struct {
 	shutdownTimeout time.Duration
 	port            uint
+	address         string
 
 	HTTPServer *http.Server
 	log        *slog.Logger
 }
 
-func New(port uint, handler http.Handler, options ...Option) *Server {
+func New(address string, port uint, handler http.Handler, options ...Option) *Server {
+	if address == "" {
+		address = "0.0.0.0"
+	}
+
 	srv := &Server{
-		port: port,
+		port:    port,
+		address: address,
 		HTTPServer: &http.Server{
-			Addr:    fmt.Sprintf(":%d", port),
+			Addr:    fmt.Sprintf("%s:%d", address, port),
 			Handler: handler,
 		},
 		shutdownTimeout: defaultShutdownTimeout,
@@ -40,7 +46,7 @@ func New(port uint, handler http.Handler, options ...Option) *Server {
 }
 
 func (s *Server) Run() error {
-	s.log.Info(fmt.Sprintf("Starting HTTP server http://0.0.0.0:%d", s.port), "port", s.port)
+	s.log.Info(fmt.Sprintf("Starting HTTP server http://%s:%d", s.address, s.port), "port", s.port)
 
 	shutdownContext, doShutdown := context.WithCancel(context.Background())
 	defer doShutdown()
