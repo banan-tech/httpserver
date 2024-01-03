@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -18,6 +19,9 @@ type Server struct {
 
 	HTTPServer *http.Server
 	log        *slog.Logger
+	ctx        context.Context
+
+	shutdownHooks []func(context.Context) error
 }
 
 func New(address string, port uint, handler http.Handler, options ...Option) *Server {
@@ -46,12 +50,17 @@ func New(address string, port uint, handler http.Handler, options ...Option) *Se
 	return srv
 }
 
+func (s *Server) AddShutdownHook(hook func(context.Context) error) {
+	s.shutdownHooks = append(s.shutdownHooks, hook)
+}
+
 func (s *Server) Run() error {
 	s.log.Info(fmt.Sprintf("Starting HTTP server http://%s:%d", s.address, s.port), "port", s.port)
 
 	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	s.ctx = serverCtx
 	s.HTTPServer.BaseContext = func(_ net.Listener) context.Context { return serverCtx }
 
 	srvErr := make(chan error, 1)
@@ -85,5 +94,10 @@ func (s *Server) startGracefulShutdown() error {
 		return err
 	}
 
-	return nil
+	var err error
+	for _, hook := range s.shutdownHooks {
+		err = errors.Join(err, hook(s.ctx)) // TODO use multierrors
+	}
+
+	return err
 }
