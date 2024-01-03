@@ -19,7 +19,9 @@ type Server struct {
 
 	HTTPServer *http.Server
 	log        *slog.Logger
-	ctx        context.Context
+
+	ctx     context.Context
+	stopCtx context.CancelFunc
 
 	shutdownHooks []func(context.Context) error
 }
@@ -47,6 +49,10 @@ func New(address string, port uint, handler http.Handler, options ...Option) *Se
 		setDefaultLogger(srv)
 	}
 
+	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	srv.ctx = serverCtx
+	srv.stopCtx = stop
+
 	return srv
 }
 
@@ -55,13 +61,11 @@ func (s *Server) AddShutdownHook(hook func(context.Context) error) {
 }
 
 func (s *Server) Run() error {
+	defer s.stopCtx()
+
 	s.log.Info(fmt.Sprintf("Starting HTTP server http://%s:%d", s.address, s.port), "port", s.port)
 
-	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	s.ctx = serverCtx
-	s.HTTPServer.BaseContext = func(_ net.Listener) context.Context { return serverCtx }
+	s.HTTPServer.BaseContext = func(_ net.Listener) context.Context { return s.ctx }
 
 	srvErr := make(chan error, 1)
 	go func() {
@@ -72,14 +76,18 @@ func (s *Server) Run() error {
 	select {
 	case err := <-srvErr:
 		return err
-	case <-serverCtx.Done():
+	case <-s.ctx.Done():
 		// Wait for first CTRL+C.
 		// Stop receiving signal notifications as soon as possible.
-		stop()
+		s.stopCtx()
 	}
 
 	// When Shutdown is called, ListenAndServe immediately returns ErrServerClosed.
 	return s.startGracefulShutdown()
+}
+
+func (s *Server) Context() context.Context {
+	return s.ctx
 }
 
 func (s *Server) startGracefulShutdown() error {
@@ -96,7 +104,7 @@ func (s *Server) startGracefulShutdown() error {
 
 	var err error
 	for _, hook := range s.shutdownHooks {
-		err = errors.Join(err, hook(s.ctx)) // TODO use multierrors
+		err = errors.Join(err, hook(timeoutContext)) // TODO use multierrors
 	}
 
 	return err
