@@ -16,7 +16,14 @@ const (
 )
 
 var handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Hello, World"))
+
+	select {
+	case <-time.Tick(12 * time.Second):
+		w.Write([]byte("Hello, World"))
+	case <-r.Context().Done():
+		w.Write([]byte("server stopped"))
+	}
+
 })
 
 func nextRequestID() string {
@@ -29,7 +36,7 @@ func main() {
 	mw := logging(slog.Default())(handler)
 	mw = tracing(nextRequestID)(mw)
 
-	server := httpserver.New("", 3000, mw, httpserver.WithLogger(slog.Default()), customOption())
+	server := httpserver.New("", 3000, mw, httpserver.WithLogger(slog.Default()), customOption(), httpserver.WithShutdownTimeout(4*time.Second))
 
 	if err := server.Run(); err != nil {
 		slog.Error("server error", "error", err)

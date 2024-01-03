@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -48,33 +49,41 @@ func New(address string, port uint, handler http.Handler, options ...Option) *Se
 func (s *Server) Run() error {
 	s.log.Info(fmt.Sprintf("Starting HTTP server http://%s:%d", s.address, s.port), "port", s.port)
 
-	shutdownContext, doShutdown := context.WithCancel(context.Background())
-	defer doShutdown()
+	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
-	go s.ensureGracefulShutdown(shutdownContext, doShutdown)
+	s.HTTPServer.BaseContext = func(_ net.Listener) context.Context { return serverCtx }
 
-	if err := s.HTTPServer.ListenAndServe(); err != http.ErrServerClosed {
+	srvErr := make(chan error, 1)
+	go func() {
+		srvErr <- s.HTTPServer.ListenAndServe()
+	}()
+
+	// Wait for interruption.
+	select {
+	case err := <-srvErr:
 		return err
+	case <-serverCtx.Done():
+		// Wait for first CTRL+C.
+		// Stop receiving signal notifications as soon as possible.
+		stop()
 	}
-	// don't return until shutdown is complete
-	<-shutdownContext.Done()
-	return nil
+
+	// When Shutdown is called, ListenAndServe immediately returns ErrServerClosed.
+	return s.startGracefulShutdown()
 }
 
-func (s *Server) ensureGracefulShutdown(shutdownContext context.Context, doShutdown context.CancelFunc) {
-	sigint := make(chan os.Signal, 1)
-	signal.Notify(sigint, os.Interrupt)
-	<-sigint
-
-	timeoutContext, doCancel := context.WithTimeout(shutdownContext, s.shutdownTimeout)
+func (s *Server) startGracefulShutdown() error {
+	timeoutContext, doCancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 	defer doCancel()
 
 	// We received an interrupt signal, shut down.
 	s.log.Info("Shutting down ..")
 	s.HTTPServer.SetKeepAlivesEnabled(false)
 	if err := s.HTTPServer.Shutdown(timeoutContext); err != nil {
-		// Error from closing listeners, or context timeout:
-		s.log.Error("closing server", "error", err)
+		// Error from closing listeners, or context timeout.
+		return err
 	}
-	doShutdown()
+
+	return nil
 }
