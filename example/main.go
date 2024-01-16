@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/khaledez/httpserver"
+	"github.com/banansys/httpserver"
 )
 
 const (
@@ -18,7 +18,7 @@ const (
 var handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 	select {
-	case <-time.Tick(12 * time.Second):
+	case <-time.Tick(3 * time.Second):
 		w.Write([]byte("Hello, World"))
 	case <-r.Context().Done():
 		w.Write([]byte("server stopped"))
@@ -36,7 +36,12 @@ func main() {
 	mw := logging(slog.Default())(handler)
 	mw = tracing(nextRequestID)(mw)
 
-	server := httpserver.New("", 3000, mw, httpserver.WithLogger(slog.Default()), customOption(), httpserver.WithShutdownTimeout(4*time.Second))
+	server := httpserver.New(mw,
+		customOption(),
+		httpserver.WithShutdownTimeout(4*time.Second),
+		httpserver.DevelopmentMode(),
+		httpserver.ListenOn(":3000"),
+	)
 
 	if err := server.Run(); err != nil {
 		slog.Error("server error", "error", err)

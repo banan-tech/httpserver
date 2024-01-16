@@ -1,0 +1,4 @@
+- restart the server and run go generate ./CHANGED_DIR/...
+- Support TLS serving from a provided TLS config
+- Support automatic TLS using ACME
+- In development mode load .env file into environment

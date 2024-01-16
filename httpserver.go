@@ -4,18 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/rjeczalik/notify"
+)
+
+type Mode string
+
+const (
+	ModeProduction  Mode = "production"
+	ModeDevelopment Mode = "development"
 )
 
 type Server struct {
 	shutdownTimeout time.Duration
-	port            uint
-	address         string
+	listenAddress   string
+	mode            Mode
 
 	HTTPServer *http.Server
 	log        *slog.Logger
@@ -26,16 +39,11 @@ type Server struct {
 	shutdownHooks []func(context.Context) error
 }
 
-func New(address string, port uint, handler http.Handler, options ...Option) *Server {
-	if address == "" {
-		address = "0.0.0.0"
-	}
+func New(handler http.Handler, options ...Option) *Server {
 
 	srv := &Server{
-		port:    port,
-		address: address,
 		HTTPServer: &http.Server{
-			Addr:    fmt.Sprintf("%s:%d", address, port),
+			Addr:    "",
 			Handler: handler,
 		},
 		shutdownTimeout: defaultShutdownTimeout,
@@ -45,8 +53,21 @@ func New(address string, port uint, handler http.Handler, options ...Option) *Se
 		option(srv)
 	}
 
+	if srv.mode != ModeProduction {
+		srv.mode = ModeDevelopment
+	}
+
 	if srv.log == nil {
 		setDefaultLogger(srv)
+	}
+
+	if srv.listenAddress == "" {
+		switch srv.mode {
+		case ModeProduction:
+			srv.listenAddress = "0.0.0.0:80"
+		case ModeDevelopment:
+			srv.listenAddress = "localhost:8080"
+		}
 	}
 
 	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -63,23 +84,46 @@ func (s *Server) AddShutdownHook(hook func(context.Context) error) {
 func (s *Server) Run() error {
 	defer s.stopCtx()
 
-	s.log.Info(fmt.Sprintf("Starting HTTP server http://%s:%d", s.address, s.port), "port", s.port)
+	s.log.Info("Starting HTTP server",
+		"mode", s.mode,
+		"listenAddress", formatListenAddress(s.listenAddress, s.mode),
+	)
 
 	s.HTTPServer.BaseContext = func(_ net.Listener) context.Context { return s.ctx }
+	s.HTTPServer.Addr = s.listenAddress
 
 	srvErr := make(chan error, 1)
 	go func() {
 		srvErr <- s.HTTPServer.ListenAndServe()
 	}()
 
-	// Wait for interruption.
-	select {
-	case err := <-srvErr:
-		return err
-	case <-s.ctx.Done():
-		// Wait for first CTRL+C.
-		// Stop receiving signal notifications as soon as possible.
-		s.stopCtx()
+	if s.mode == ModeProduction {
+		// Wait for interruption.
+		select {
+		case err := <-srvErr:
+			return err
+		case <-s.ctx.Done():
+			// Wait for first CTRL+C.
+			// Stop receiving signal notifications as soon as possible.
+			s.stopCtx()
+		}
+	} else {
+		fileChangesChan := watchForFileChanges(s.log)
+		defer notify.Stop(fileChangesChan)
+	loop:
+		for {
+			select {
+			case err := <-srvErr:
+				return err
+			case <-s.ctx.Done():
+				// Wait for first CTRL+C.
+				// Stop receiving signal notifications as soon as possible.
+				s.stopCtx()
+				break loop
+			case changeEvent := <-fileChangesChan:
+				s.handleFileChange(changeEvent)
+			}
+		}
 	}
 
 	// When Shutdown is called, ListenAndServe immediately returns ErrServerClosed.
@@ -108,4 +152,53 @@ func (s *Server) startGracefulShutdown() error {
 	}
 
 	return err
+}
+
+func (s *Server) handleFileChange(event notify.EventInfo) {
+	s.log.Info("file changed", "event", event.Event(), "path", event.Path())
+}
+
+func watchForFileChanges(logger *slog.Logger) (c chan notify.EventInfo) {
+	// Make the channel buffered to ensure no event is dropped. Notify will drop
+	// an event if the receiver is not able to keep up the sending pace.
+	c = make(chan notify.EventInfo, 1)
+	// Set up a watchpoint listening on events within current working directory.
+	// Dispatch each create and remove events separately to c.
+	watchPath := modulePath()
+	if err := notify.Watch(path.Join(watchPath, "..."), c, notify.All); err != nil {
+		panic(fmt.Sprintf("Error with watching for file changes, exiting ... %v", err))
+	}
+	logger.Info("Watching for file changes", "path", watchPath)
+	return
+}
+
+func modulePath() (roots string) {
+	dir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+
+	dir = filepath.Clean(dir)
+	// Look for enclosing go.mod.
+	for {
+		ffs := os.DirFS(dir)
+		info, err := fs.Stat(ffs, "go.mod")
+		if err == nil && !info.IsDir() {
+			return dir
+		}
+		d := filepath.Dir(dir)
+		if d == dir {
+			break
+		}
+		dir = d
+	}
+
+	panic(errors.New("couldn't find go.mod!"))
+}
+
+func formatListenAddress(addr string, mode Mode) string {
+	if strings.Index(addr, ":") == 0 {
+		addr = "0.0.0.0" + addr
+	}
+	return fmt.Sprintf("http://%s", addr)
 }

@@ -1,0 +1,25 @@
+version: "3"
+
+services:
+  step-ca:
+    image: jitesoft/step-ca
+    volumes:
+      - ".step-ca/:/home/step/.step"
+    environment:
+      - "CONFIGPATH=/home/step/.step/config/ca.json"
+      - "PWDPATH=/home/step/.step/password.txt"
+  
+  step-cli:
+    image: jitesoft/step-cli
+    profiles:
+      - init
+    volumes:
+      - ".step-ca/:/home/step/config"
+    command: 
+      - /bin/sh
+      - "-c"
+      - |
+        rm -rf /home/step/.step; mkdir -p /home/step/.step; 
+        step crypto rand > .step/password.txt;
+        step ca init --deployment-type=standalone --acme --name='Banan Systems' --dns=step-ca.httpserver.orb.local --address=0.0.0.0:443 --provisioner=khaled@banan.ps --password-file=/home/step/.step/password.txt;
+        mv /home/step/.step/* /home/step/config/
