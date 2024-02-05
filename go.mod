@@ -3,7 +3,7 @@ module github.com/banansys/httpserver
 go 1.21.5
 
 require (
-	github.com/lmittmann/tint v1.0.3
+	github.com/lmittmann/tint v1.0.4
 	github.com/rjeczalik/notify v0.9.3
 )
 
