@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path"
 	"path/filepath"
@@ -155,7 +156,26 @@ func (s *Server) startGracefulShutdown() error {
 }
 
 func (s *Server) handleFileChange(event notify.EventInfo) {
-	s.log.Info("file changed", "event", event.Event(), "path", event.Path())
+	isGoFile := strings.HasSuffix(event.Path(), ".go")
+	if !isGoFile {
+		return
+	}
+
+	moduleRoot := modulePath()
+	pathToGenerate := strings.Replace(path.Dir(event.Path()), moduleRoot, ".", 1)
+	s.log.Info("file changed", "event", event.Event(), "path", pathToGenerate)
+	genCmd := exec.Command("go", "generate", pathToGenerate)
+	genCmd.Dir = moduleRoot
+	genCmd.Stdout = os.Stdout
+	genCmd.Stderr = os.Stderr
+
+	err := genCmd.Run()
+	if err != nil {
+		s.log.Error("go generate failed", "error", err)
+		return
+	}
+
+	os.Getwd()
 }
 
 func watchForFileChanges(logger *slog.Logger) (c chan notify.EventInfo) {

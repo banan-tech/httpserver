@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
@@ -18,7 +17,7 @@ const (
 var handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 	select {
-	case <-time.Tick(3 * time.Second):
+	case <-time.Tick(1 * time.Second):
 		w.Write([]byte("Hello, World"))
 	case <-r.Context().Done():
 		w.Write([]byte("server stopped"))
@@ -31,7 +30,7 @@ func nextRequestID() string {
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(httpserver.DefaultLoggerDevelopment)
 
 	mw := logging(slog.Default())(handler)
 	mw = tracing(nextRequestID)(mw)

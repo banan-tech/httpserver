@@ -10,6 +10,16 @@ import (
 
 const defaultShutdownTimeout = 10 * time.Second
 
+var (
+	DefaultLoggerProduction = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	DefaultLoggerDevelopment = slog.New(tint.NewHandler(os.Stdout, &tint.Options{
+		Level:      slog.LevelDebug,
+		TimeFormat: time.TimeOnly,
+	}))
+)
+
 type Option func(*Server)
 
 func setDefaultLogger(server *Server) {
@@ -18,15 +28,9 @@ func setDefaultLogger(server *Server) {
 	switch server.mode {
 
 	case ModeProduction:
-		logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
-		}))
-
+		logger = DefaultLoggerProduction
 	default:
-		logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{
-			Level:      slog.LevelDebug,
-			TimeFormat: time.TimeOnly,
-		}))
+		logger = DefaultLoggerDevelopment
 	}
 
 	WithLogger(logger.WithGroup("httpserver"))(server)
