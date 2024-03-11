@@ -30,6 +30,7 @@ type Server struct {
 	shutdownTimeout time.Duration
 	listenAddress   string
 	mode            Mode
+	watchEnabled    bool
 
 	HTTPServer *http.Server
 	log        *slog.Logger
@@ -156,6 +157,9 @@ func (s *Server) startGracefulShutdown() error {
 }
 
 func (s *Server) handleFileChange(event notify.EventInfo) {
+	if !s.watchEnabled {
+		return
+	}
 	isGoFile := strings.HasSuffix(event.Path(), ".go")
 	if !isGoFile {
 		return
