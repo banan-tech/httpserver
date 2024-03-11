@@ -88,7 +88,7 @@ func (s *Server) Run() error {
 
 	s.log.Info("Starting HTTP server",
 		"mode", s.mode,
-		"listenAddress", formatListenAddress(s.listenAddress, s.mode),
+		"listenAddress", formatListenAddress(s.listenAddress),
 	)
 
 	s.HTTPServer.BaseContext = func(_ net.Listener) context.Context { return s.ctx }
@@ -220,7 +220,7 @@ func modulePath() (roots string) {
 	panic(errors.New("couldn't find go.mod!"))
 }
 
-func formatListenAddress(addr string, mode Mode) string {
+func formatListenAddress(addr string) string {
 	if strings.Index(addr, ":") == 0 {
 		addr = "0.0.0.0" + addr
 	}
