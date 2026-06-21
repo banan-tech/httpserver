@@ -21,10 +21,11 @@ type Config struct {
 	write_timeout          time.Duration
 	idle_timeout           time.Duration
 	shutdown_timeout       time.Duration
-	pre_shutdown_delay     time.Duration
 	readiness_checks       []NamedCheck
 	shutdown_hooks         []ShutdownHook
 	disable_default_probes bool
+	liveness_path          string
+	readiness_path         string
 }
 
 func default_config() Config {
@@ -36,7 +37,8 @@ func default_config() Config {
 		write_timeout:          70 * time.Second,
 		idle_timeout:           90 * time.Second,
 		shutdown_timeout:       15 * time.Second,
-		pre_shutdown_delay:     5 * time.Second,
+		liveness_path:          "/livez",
+		readiness_path:         "/readyz",
 		handler:                lisette.MakeOptionNone[http.Handler](),
 		metrics_handler:        lisette.MakeOptionNone[http.Handler](),
 		disable_default_probes: false,
@@ -109,12 +111,6 @@ func WithShutdownTimeout(d time.Duration) ServerOption {
 	}
 }
 
-func WithPreShutdownDelay(d time.Duration) ServerOption {
-	return func(c *Config) {
-		c.pre_shutdown_delay = d
-	}
-}
-
 func WithReadinessCheck(name string, check CheckFunc) ServerOption {
 	return func(c *Config) {
 		ref_1 := c
@@ -144,5 +140,17 @@ func WithPortFromEnv() ServerOption {
 func WithoutDefaultProbes() ServerOption {
 	return func(c *Config) {
 		c.disable_default_probes = true
+	}
+}
+
+func WithLivenessPath(path string) ServerOption {
+	return func(c *Config) {
+		c.liveness_path = path
+	}
+}
+
+func WithReadinessPath(path string) ServerOption {
+	return func(c *Config) {
+		c.readiness_path = path
 	}
 }

@@ -1,5 +1,5 @@
 # Module path other Go projects import this library as. Keep in sync with go.mod.
-GO_MODULE := github.com/banansys/httpserver
+GO_MODULE := github.com/banan-tech/httpserver
 # Directory `lis build` writes the generated `httpserver` Go package into.
 GEN_PKG   := target/httpserver
 

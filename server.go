@@ -19,12 +19,11 @@ import (
 type ShutdownHook func(context.Context) error
 
 type Server struct {
-	srv                *http.Server
-	shutdown_timeout   time.Duration
-	pre_shutdown_delay time.Duration
-	ready              *atomic.Bool
-	logger             *slog.Logger
-	shutdown_hooks     []ShutdownHook
+	srv              *http.Server
+	shutdown_timeout time.Duration
+	ready            *atomic.Bool
+	logger           *slog.Logger
+	shutdown_hooks   []ShutdownHook
 }
 
 func New(options []ServerOption) *Server {
@@ -37,8 +36,8 @@ func New(options []ServerOption) *Server {
 	ready.Store(true)
 	mux := http.NewServeMux()
 	if !cfg.disable_default_probes {
-		mux.HandleFunc("/livez", liveness_handler)
-		mux.Handle("/readyz", readiness_handler(ready, cfg.readiness_checks, cfg.logger))
+		mux.HandleFunc(cfg.liveness_path, liveness_handler)
+		mux.Handle(cfg.readiness_path, readiness_handler(ready, cfg.readiness_checks, cfg.logger))
 	}
 	subject_1 := cfg.metrics_handler
 	if subject_1.Tag == lisette.OptionSome {
@@ -68,11 +67,10 @@ func New(options []ServerOption) *Server {
 			IdleTimeout:       cfg.idle_timeout,
 			ErrorLog:          unwrap_6,
 		},
-		shutdown_timeout:   cfg.shutdown_timeout,
-		pre_shutdown_delay: cfg.pre_shutdown_delay,
-		ready:              ready,
-		logger:             cfg.logger,
-		shutdown_hooks:     cfg.shutdown_hooks,
+		shutdown_timeout: cfg.shutdown_timeout,
+		ready:            ready,
+		logger:           cfg.logger,
+		shutdown_hooks:   cfg.shutdown_hooks,
 	}
 }
 
@@ -139,9 +137,6 @@ func (s *Server) run_with_context(ctx context.Context) error {
 		_ = ok
 	}
 	s.ready.Store(false)
-	callee_4 := s.logger.Info
-	callee_4("readiness disabled, awaiting endpoint depropagation", "delay", s.pre_shutdown_delay.String())
-	time.Sleep(s.pre_shutdown_delay)
 	return s.Shutdown(context.Background())
 }
 

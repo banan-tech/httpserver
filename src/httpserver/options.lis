@@ -1,7 +1,7 @@
+import "go:log/slog"
 import "go:net/http"
 import "go:os"
 import "go:time"
-import "go:log/slog"
 
 // config holds everything an Option can tune. It is private and mutable; New
 // folds it down into an immutable Server. Keeping the knobs here (not on Server)
@@ -16,111 +16,122 @@ struct Config {
   write_timeout: time.Duration,
   idle_timeout: time.Duration,
   shutdown_timeout: time.Duration,
-  pre_shutdown_delay: time.Duration,
   readiness_checks: Slice<NamedCheck>,
   shutdown_hooks: Slice<ShutdownHook>,
   disable_default_probes: bool,
+  liveness_path: string,
+  readiness_path: string,
 }
 
 fn default_config() -> Config {
-  Config {
+  Config { 
     addr: ":8080",
     logger: default_logger(),
-    read_header_timeout: 5 * time.Second,  // protect against slow-header (Slowloris) attacks
-    read_timeout: 15 * time.Second,        // full request read (headers + body)
-    write_timeout: 70 * time.Second,       // exceed the client timeout so the client sees a clean error
-    idle_timeout: 90 * time.Second,        // keep-alive idle; always the longest in the chain
+    read_header_timeout: 5 * time.Second, // protect against slow-header (Slowloris) attacks
+    read_timeout: 15 * time.Second, // full request read (headers + body)
+    write_timeout: 70 * time.Second, // exceed the client timeout so the client sees a clean error
+    idle_timeout: 90 * time.Second, // keep-alive idle; always the longest in the chain
     shutdown_timeout: 15 * time.Second,
-    pre_shutdown_delay: 5 * time.Second,
-    ..
+    liveness_path: "/livez",
+    readiness_path: "/readyz",
+    ..,
   }
 }
 
 // The default structured logger: JSON to stdout at info level.
 pub fn default_logger() -> Ref<slog.Logger> {
-  slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions {
-    Level: Some(slog.LevelInfo),
-    ..
-  }))
+  slog.New(slog.NewJSONHandler(
+    os.Stdout,
+    &slog.HandlerOptions { Level: Some(slog.LevelInfo), .. },
+  ))
 }
 
 // A ServerOption tunes the configuration during construction (functional-options
 // pattern). Named ServerOption because `Option` is a reserved prelude type.
-pub type ServerOption = fn(Ref<Config>)
+pub type ServerOption = fn(Ref<Config>) -> ()
 
 // with_addr sets the listen address (default ":8080").
 pub fn with_addr(addr: string) -> ServerOption {
-  |c| { c.addr = addr }
+  |c| {
+    c.addr = addr
+  }
 }
 
 // with_handler plugs in a custom http.Handler (a router such as chi, gorilla/mux,
 // or a hand-rolled ServeMux) mounted at "/".
 pub fn with_handler(h: http.Handler) -> ServerOption {
-  |c| { c.handler = Some(h) }
+  |c| {
+    c.handler = Some(h)
+  }
 }
 
 // with_metrics_handler registers an http.Handler at /_metrics (e.g. Prometheus).
 pub fn with_metrics_handler(h: http.Handler) -> ServerOption {
-  |c| { c.metrics_handler = Some(h) }
+  |c| {
+    c.metrics_handler = Some(h)
+  }
 }
 
 // with_logger sets the structured logger used for server and request logging.
 pub fn with_logger(logger: Ref<slog.Logger>) -> ServerOption {
-  |c| { c.logger = logger }
+  |c| {
+    c.logger = logger
+  }
 }
 
 // with_read_header_timeout sets the deadline for reading request headers.
 // Protects against slow-header (Slowloris-style) attacks.
 pub fn with_read_header_timeout(d: time.Duration) -> ServerOption {
-  |c| { c.read_header_timeout = d }
+  |c| {
+    c.read_header_timeout = d
+  }
 }
 
 // with_read_timeout sets the deadline for reading the full request (headers + body).
 pub fn with_read_timeout(d: time.Duration) -> ServerOption {
-  |c| { c.read_timeout = d }
+  |c| {
+    c.read_timeout = d
+  }
 }
 
 // with_write_timeout sets the deadline for writing the response. Should exceed
 // the client's own timeout so the client sees a clean error first.
 pub fn with_write_timeout(d: time.Duration) -> ServerOption {
-  |c| { c.write_timeout = d }
+  |c| {
+    c.write_timeout = d
+  }
 }
 
 // with_idle_timeout sets how long a keep-alive connection waits for the next request.
 pub fn with_idle_timeout(d: time.Duration) -> ServerOption {
-  |c| { c.idle_timeout = d }
+  |c| {
+    c.idle_timeout = d
+  }
 }
 
 // with_shutdown_timeout sets the graceful-drain deadline.
 pub fn with_shutdown_timeout(d: time.Duration) -> ServerOption {
-  |c| { c.shutdown_timeout = d }
+  |c| {
+    c.shutdown_timeout = d
+  }
 }
 
-// with_pre_shutdown_delay sets how long the server keeps serving after receiving
-// SIGTERM before it starts draining. During this window /readyz returns 503 so
-// Kubernetes stops routing new requests, while in-flight requests from pods that
-// haven't yet seen the endpoint update still complete.
-//
-// Constraint: pre_shutdown_delay + shutdown_timeout must be less than the pod's
-// terminationGracePeriodSeconds, else SIGKILL fires before the drain finishes.
-// Default arithmetic: 5s + 15s = 20s < 30s (the k8s default).
-pub fn with_pre_shutdown_delay(d: time.Duration) -> ServerOption {
-  |c| { c.pre_shutdown_delay = d }
-}
-
-// with_readiness_check registers a named dependency check for /readyz. All checks
+// with_readiness_check registers a named dependency check for /readyz. Call it
+// once per dependency (DB, cache, downstream API); checks accumulate. All checks
 // run sequentially on every probe; the first failure returns 503 with JSON
 // naming the failing check. Dependency checks belong here, never in liveness.
 pub fn with_readiness_check(name: string, check: CheckFunc) -> ServerOption {
   |c| {
-    c.readiness_checks = c.readiness_checks.append(NamedCheck { name: name, check: check })
+    c.readiness_checks = c.readiness_checks.append(NamedCheck { name, check })
   }
 }
 
 // with_shutdown_hook registers a function run during graceful shutdown, after
 // connections have drained. It receives the shutdown-timeout-bounded context.
 pub fn with_shutdown_hook(hook: ShutdownHook) -> ServerOption {
-  |c| { c.shutdown_hooks = c.shutdown_hooks.append(hook) }
+  |c| {
+    c.shutdown_hooks = c.shutdown_hooks.append(hook)
+  }
 }
 
 // with_port_from_env reads the PORT environment variable and sets the listen
@@ -129,9 +140,7 @@ pub fn with_shutdown_hook(hook: ShutdownHook) -> ServerOption {
 pub fn with_port_from_env() -> ServerOption {
   |c| {
     let port = os.Getenv("PORT")
-    if port != "" {
-      c.addr = f":{port}"
-    }
+    if port != "" { c.addr = f":{port}" }
   }
 }
 
@@ -139,5 +148,23 @@ pub fn with_port_from_env() -> ServerOption {
 // Use when the service needs custom probe logic or non-standard paths — define
 // them in the handler passed to with_handler instead.
 pub fn without_default_probes() -> ServerOption {
-  |c| { c.disable_default_probes = true }
+  |c| {
+    c.disable_default_probes = true
+  }
+}
+
+// with_liveness_path sets the path the built-in liveness probe is mounted at
+// (default "/livez"). Ignored when without_default_probes is used.
+pub fn with_liveness_path(path: string) -> ServerOption {
+  |c| {
+    c.liveness_path = path
+  }
+}
+
+// with_readiness_path sets the path the built-in readiness probe is mounted at
+// (default "/readyz"). Ignored when without_default_probes is used.
+pub fn with_readiness_path(path: string) -> ServerOption {
+  |c| {
+    c.readiness_path = path
+  }
 }

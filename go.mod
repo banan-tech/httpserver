@@ -1,4 +1,4 @@
-module github.com/banansys/httpserver
+module github.com/banan-tech/httpserver
 
 go 1.25
 

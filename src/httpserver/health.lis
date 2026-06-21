@@ -1,11 +1,13 @@
 import "go:context"
 import "go:encoding/json"
+import "go:log/slog"
 import "go:net/http"
 import "go:sync/atomic"
-import "go:log/slog"
 
 const CONTENT_TYPE = "Content-Type"
+
 const CONTENT_TYPE_PLAIN = "text/plain; charset=utf-8"
+
 const CONTENT_TYPE_JSON = "application/json"
 
 // CheckFunc is a readiness dependency check. Return Err to signal the service
@@ -14,10 +16,7 @@ const CONTENT_TYPE_JSON = "application/json"
 // restart-storm that escalates the blip into a full outage.
 pub type CheckFunc = fn(context.Context) -> Result<(), error>
 
-struct NamedCheck {
-  name: string,
-  check: CheckFunc,
-}
+struct NamedCheck { name: string, check: CheckFunc }
 
 // liveness_handler returns 200 whenever the process can run an HTTP handler. It
 // intentionally performs NO dependency checks: liveness only detects a fully
@@ -36,7 +35,11 @@ fn liveness_handler(w: http.ResponseWriter, r: Ref<http.Request>) {
 // readiness_handler returns 200 only when the server is not shutting down and
 // every registered check passes. On the first failure it logs at Warn and
 // returns 503 with a JSON body naming the failed check.
-fn readiness_handler(ready: Ref<atomic.Bool>, checks: Slice<NamedCheck>, logger: Ref<slog.Logger>) -> http.Handler {
+fn readiness_handler(
+  ready: Ref<atomic.Bool>,
+  checks: Slice<NamedCheck>,
+  logger: Ref<slog.Logger>,
+) -> http.Handler {
   http.HandlerFunc(|w: http.ResponseWriter, r: Ref<http.Request>| {
     if r.Method != http.MethodGet {
       http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -52,9 +55,13 @@ fn readiness_handler(ready: Ref<atomic.Bool>, checks: Slice<NamedCheck>, logger:
 
     for c in checks {
       if let Err(e) = c.check(r.Context()) {
-        logger.WarnContext(r.Context(), "readiness check failed",
-          "check", c.name,
-          "error", e.Error(),
+        logger.WarnContext(
+          r.Context(),
+          "readiness check failed",
+          "check",
+          c.name,
+          "error",
+          e.Error(),
         )
         w.Header().Set(CONTENT_TYPE, CONTENT_TYPE_JSON)
         w.WriteHeader(http.StatusServiceUnavailable)

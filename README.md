@@ -14,7 +14,7 @@ Go projects use it like any normal library.
 ## Install
 
 ```sh
-go get github.com/banansys/httpserver
+go get github.com/banan-tech/httpserver
 ```
 
 ## Quick start
@@ -25,7 +25,7 @@ package main
 import (
 	"net/http"
 
-	"github.com/banansys/httpserver"
+	"github.com/banan-tech/httpserver"
 )
 
 func main() {
@@ -48,7 +48,11 @@ func main() {
 
 ## Endpoints
 
-Registered automatically unless `WithoutDefaultProbes()` is used:
+Registered automatically unless `WithoutDefaultProbes()` is used. The probe
+paths default to `/livez` and `/readyz` and are configurable via
+`WithLivenessPath` / `WithReadinessPath`. Probes are mounted directly on the
+internal mux, so they never pass through (and are never logged by) the handler
+given to `WithHandler`:
 
 | Path        | Purpose                                                                                   |
 | ----------- | ----------------------------------------------------------------------------------------- |
@@ -73,16 +77,17 @@ Pass any of these to `New`:
 | `WithPortFromEnv()`            | —       | Use `:$PORT` if `PORT` is set (applied before options).   |
 | `WithHandler(h)`               | —       | Root handler mounted at `/`.                              |
 | `WithMetricsHandler(h)`        | —       | Handler mounted at `/_metrics`.                           |
-| `WithReadinessCheck(name, fn)` | —       | Register a named dependency check for `/readyz`.          |
-| `WithoutDefaultProbes()`       | off     | Disable the built-in `/livez` and `/readyz`.              |
-| `WithLogger(l)`                | JSON    | Structured `*slog.Logger`.                                |
-| `WithReadHeaderTimeout(d)`     | `5s`    | Header read deadline (Slowloris protection).              |
-| `WithReadTimeout(d)`           | `15s`   | Full request read deadline.                               |
-| `WithWriteTimeout(d)`          | `70s`   | Response write deadline.                                  |
-| `WithIdleTimeout(d)`           | `90s`   | Keep-alive idle timeout.                                  |
-| `WithShutdownTimeout(d)`       | `15s`   | Graceful drain deadline.                                  |
-| `WithPreShutdownDelay(d)`      | `5s`    | Keep serving after `SIGTERM` while `/readyz` reports 503. |
-| `WithShutdownHook(fn)`         | —       | Run during shutdown, after connections drain.             |
+| `WithReadinessCheck(name, fn)` | —         | Register a named dependency check for `/readyz` (call once per dependency). |
+| `WithoutDefaultProbes()`       | off       | Disable the built-in liveness and readiness probes.       |
+| `WithLivenessPath(path)`       | `/livez`  | Path the liveness probe is mounted at.                    |
+| `WithReadinessPath(path)`      | `/readyz` | Path the readiness probe is mounted at.                   |
+| `WithLogger(l)`                | JSON      | Structured `*slog.Logger`.                                |
+| `WithReadHeaderTimeout(d)`     | `5s`      | Header read deadline (Slowloris protection).              |
+| `WithReadTimeout(d)`           | `15s`     | Full request read deadline.                               |
+| `WithWriteTimeout(d)`          | `70s`     | Response write deadline.                                  |
+| `WithIdleTimeout(d)`           | `90s`     | Keep-alive idle timeout.                                  |
+| `WithShutdownTimeout(d)`       | `15s`     | Graceful drain deadline.                                  |
+| `WithShutdownHook(fn)`         | —         | Run during shutdown, after connections drain.             |
 
 ### Readiness checks
 
@@ -97,13 +102,13 @@ srv := httpserver.New([]httpserver.ServerOption{
 
 ## Graceful shutdown
 
-On `SIGINT`/`SIGTERM`, `Run` flips `/readyz` to `503` (so Kubernetes stops
-routing new traffic), waits `PreShutdownDelay` for endpoint depropagation, then
-drains in-flight requests within `ShutdownTimeout` before exiting.
+On `SIGINT`/`SIGTERM`, `Run` flips the readiness probe to `503` (so Kubernetes
+stops routing new traffic), then drains in-flight requests within
+`ShutdownTimeout` before running any shutdown hooks and exiting.
 
-> Keep `PreShutdownDelay + ShutdownTimeout` below the pod's
-> `terminationGracePeriodSeconds`, or `SIGKILL` fires before the drain finishes.
-> Defaults: `5s + 15s = 20s < 30s` (the Kubernetes default).
+> Keep `ShutdownTimeout` below the pod's `terminationGracePeriodSeconds`, or
+> `SIGKILL` fires before the drain finishes. Default: `15s < 30s` (the
+> Kubernetes default).
 
 ## Server API
 
