@@ -1,0 +1,70 @@
+import "go:context"
+import "go:net/http"
+import "go:strconv"
+import "go:time"
+import "go:log/slog"
+import "httpserver"
+
+const REQUEST_ID_KEY = 0
+
+fn handler() -> http.Handler {
+  http.HandlerFunc(|w: http.ResponseWriter, _r: Ref<http.Request>| {
+    let _ = w.Write("Hello, World" as Slice<uint8>)
+  })
+}
+
+fn next_request_id() -> string {
+  strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+fn main() {
+  slog.SetDefault(httpserver.default_logger())
+
+  let logged = logging(slog.Default())(handler())
+  let mw = tracing(next_request_id)(logged)
+
+  let server = httpserver.new([
+    httpserver.with_handler(mw),
+    httpserver.with_read_header_timeout(500 * time.Millisecond),
+    httpserver.with_shutdown_timeout(4 * time.Second),
+    httpserver.with_pre_shutdown_delay(1 * time.Second),
+    httpserver.with_readiness_check("self", |_ctx| Ok(())),
+    httpserver.with_addr(":3000"),
+  ])
+
+  if let Err(e) = server.run() {
+    slog.Error("server error", "error", e)
+  }
+}
+
+fn logging(logger: Ref<slog.Logger>) -> fn(http.Handler) -> http.Handler {
+  |next| {
+    http.HandlerFunc(|w: http.ResponseWriter, r: Ref<http.Request>| {
+      defer {
+        let request_id = assert_type<string>(r.Context().Value(REQUEST_ID_KEY)).unwrap_or("unknown")
+        let path = r.URL.map_or("", |u| u.Path)
+        logger.InfoContext(r.Context(), "",
+          "request_id", request_id,
+          "method", r.Method,
+          "path", path,
+          "remote_addr", r.RemoteAddr,
+          "user_agent", r.UserAgent())
+      }
+      next.ServeHTTP(w, r)
+    })
+  }
+}
+
+fn tracing(next_request_id: fn() -> string) -> fn(http.Handler) -> http.Handler {
+  |next| {
+    http.HandlerFunc(|w: http.ResponseWriter, r: Ref<http.Request>| {
+      let mut request_id = r.Header.Get("Request-Id")
+      if request_id == "" {
+        request_id = next_request_id()
+      }
+      let ctx = context.WithValue(r.Context(), REQUEST_ID_KEY, request_id)
+      w.Header().Set("Request-Id", request_id)
+      next.ServeHTTP(w, r.WithContext(ctx))
+    })
+  }
+}

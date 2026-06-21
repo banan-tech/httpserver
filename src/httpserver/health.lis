@@ -1,0 +1,73 @@
+import "go:context"
+import "go:encoding/json"
+import "go:net/http"
+import "go:sync/atomic"
+import "go:log/slog"
+
+const CONTENT_TYPE = "Content-Type"
+const CONTENT_TYPE_PLAIN = "text/plain; charset=utf-8"
+const CONTENT_TYPE_JSON = "application/json"
+
+// CheckFunc is a readiness dependency check. Return Err to signal the service
+// is not ready to receive traffic. Dependency failures belong here, never in
+// liveness — a dependency blip failing every pod's liveness at once triggers a
+// restart-storm that escalates the blip into a full outage.
+pub type CheckFunc = fn(context.Context) -> Result<(), error>
+
+struct NamedCheck {
+  name: string,
+  check: CheckFunc,
+}
+
+// liveness_handler returns 200 whenever the process can run an HTTP handler. It
+// intentionally performs NO dependency checks: liveness only detects a fully
+// wedged process (deadlock, exhausted goroutine pool) that only a restart can
+// fix. Put dependency checks in /readyz instead.
+fn liveness_handler(w: http.ResponseWriter, r: Ref<http.Request>) {
+  if r.Method != http.MethodGet {
+    http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+    return
+  }
+  w.Header().Set(CONTENT_TYPE, CONTENT_TYPE_PLAIN)
+  w.WriteHeader(http.StatusOK)
+  let _ = w.Write("ok" as Slice<uint8>)
+}
+
+// readiness_handler returns 200 only when the server is not shutting down and
+// every registered check passes. On the first failure it logs at Warn and
+// returns 503 with a JSON body naming the failed check.
+fn readiness_handler(ready: Ref<atomic.Bool>, checks: Slice<NamedCheck>, logger: Ref<slog.Logger>) -> http.Handler {
+  http.HandlerFunc(|w: http.ResponseWriter, r: Ref<http.Request>| {
+    if r.Method != http.MethodGet {
+      http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+      return
+    }
+
+    if !ready.Load() {
+      w.Header().Set(CONTENT_TYPE, CONTENT_TYPE_PLAIN)
+      w.WriteHeader(http.StatusServiceUnavailable)
+      let _ = w.Write("shutting down" as Slice<uint8>)
+      return
+    }
+
+    for c in checks {
+      if let Err(e) = c.check(r.Context()) {
+        logger.WarnContext(r.Context(), "readiness check failed",
+          "check", c.name,
+          "error", e.Error(),
+        )
+        w.Header().Set(CONTENT_TYPE, CONTENT_TYPE_JSON)
+        w.WriteHeader(http.StatusServiceUnavailable)
+        let mut body = Map.new<string, string>()
+        body["failed_check"] = c.name
+        body["error"] = e.Error()
+        let _ = json.NewEncoder(w).Encode(body)
+        return
+      }
+    }
+
+    w.Header().Set(CONTENT_TYPE, CONTENT_TYPE_PLAIN)
+    w.WriteHeader(http.StatusOK)
+    let _ = w.Write("ok" as Slice<uint8>)
+  })
+}
