@@ -1,10 +1,5 @@
 module github.com/banansys/httpserver
 
-go 1.21.5
+go 1.25
 
-require (
-	github.com/lmittmann/tint v1.0.4
-	github.com/rjeczalik/notify v0.9.3
-)
-
-require golang.org/x/sys v0.16.0 // indirect
+require github.com/ivov/lisette/prelude v0.4.3

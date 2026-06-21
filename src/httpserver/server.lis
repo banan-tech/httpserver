@@ -1,0 +1,157 @@
+import "go:context"
+import "go:errors"
+import "go:net/http"
+import "go:os"
+import "go:os/signal"
+import "go:syscall"
+import "go:time"
+import "go:sync/atomic"
+import "go:log/slog"
+
+// A ShutdownHook runs during graceful shutdown, after connections have drained.
+// It receives a context cancelled once the shutdown timeout elapses.
+pub type ShutdownHook = fn(context.Context) -> Result<(), error>
+
+// Server wraps net/http.Server with /livez and /readyz probe endpoints wired
+// into graceful shutdown for Kubernetes-native rolling deploys. /livez is a
+// static 200 (process-alive signal); /readyz is shutdown-aware and runs any
+// registered readiness checks.
+pub struct Server {
+  srv: Ref<http.Server>,
+  shutdown_timeout: time.Duration,
+  pre_shutdown_delay: time.Duration,
+  ready: Ref<atomic.Bool>,
+  logger: Ref<slog.Logger>,
+  shutdown_hooks: Slice<ShutdownHook>,
+}
+
+// new builds a Server from options. Unless without_default_probes is used,
+// /livez and /readyz are always registered regardless of with_handler.
+pub fn new(options: Slice<ServerOption>) -> Ref<Server> {
+  let mut cfg = default_config()
+  // Apply PORT env before user options so with_addr can still override it.
+  with_port_from_env()(&cfg)
+  for o in options {
+    o(&cfg)
+  }
+
+  let ready = &atomic.Bool { .. }
+  ready.Store(true)
+
+  let mux = http.NewServeMux()
+  if !cfg.disable_default_probes {
+    mux.HandleFunc("/livez", liveness_handler)
+    mux.Handle("/readyz", readiness_handler(ready, cfg.readiness_checks, cfg.logger))
+  }
+  if let Some(m) = cfg.metrics_handler {
+    mux.Handle("/_metrics", m)
+  }
+  if let Some(h) = cfg.handler {
+    mux.Handle("/", h)
+  }
+
+  &Server {
+    srv: &http.Server {
+      Addr: cfg.addr,
+      Handler: Some(mux),
+      ReadHeaderTimeout: cfg.read_header_timeout,
+      ReadTimeout: cfg.read_timeout,
+      WriteTimeout: cfg.write_timeout,
+      IdleTimeout: cfg.idle_timeout,
+      // Bridge net/http's internal errors (TLS handshake failures, connection
+      // resets) into the structured logger so all output stays JSON on stdout.
+      ErrorLog: Some(slog.NewLogLogger(cfg.logger.Handler(), slog.LevelError)),
+      ..
+    },
+    shutdown_timeout: cfg.shutdown_timeout,
+    pre_shutdown_delay: cfg.pre_shutdown_delay,
+    ready: ready,
+    logger: cfg.logger,
+    shutdown_hooks: cfg.shutdown_hooks,
+  }
+}
+
+impl Server {
+  // handler returns the root http.Handler, useful for httptest in tests.
+  pub fn handler(self) -> Option<http.Handler> {
+    self.srv.Handler
+  }
+
+  // start begins serving and blocks until the server stops. A graceful stop
+  // (ErrServerClosed) is reported as Ok.
+  pub fn start(self: Ref<Server>) -> Result<(), error> {
+    self.logger.Info("server starting", "addr", self.srv.Addr)
+    match self.srv.ListenAndServe() {
+      Ok(_) => Ok(()),
+      Err(e) => {
+        if errors.Is(e, http.ErrServerClosed) {
+          Ok(())
+        } else {
+          self.logger.Error("server error", "error", e.Error())
+          Err(e)
+        }
+      },
+    }
+  }
+
+  // run starts the server and blocks until SIGINT or SIGTERM, then shuts down
+  // gracefully. Returns any error from start (e.g. port unavailable) or shutdown.
+  pub fn run(self: Ref<Server>) -> Result<(), error> {
+    let (ctx, stop) = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    defer stop()
+    self.run_with_context(ctx)
+  }
+
+  // run_with_context is the signal-free core, kept separate so tests can drive
+  // shutdown by cancelling a context of their own.
+  fn run_with_context(self: Ref<Server>, ctx: context.Context) -> Result<(), error> {
+    let start_err = Channel.buffered<error>(1)
+    task {
+      if let Err(e) = self.start() {
+        let _ = start_err.send(e)
+      }
+    }
+
+    let done = ctx.Done()
+    select {
+      match start_err.receive() {
+        Some(e) => return Err(e),
+        None => (),
+      },
+      match done.receive() {
+        Some(_) => (),
+        None => (),
+      },
+    }
+
+    // Flip readiness before sleeping so Kubernetes stops routing new requests
+    // while we wait for endpoint depropagation across the cluster.
+    self.ready.Store(false)
+    self.logger.Info("readiness disabled, awaiting endpoint depropagation",
+      "delay", self.pre_shutdown_delay.String(),
+    )
+    time.Sleep(self.pre_shutdown_delay)
+
+    self.shutdown(context.Background())
+  }
+
+  // shutdown drains connections within the shutdown timeout, then runs hooks.
+  pub fn shutdown(self: Ref<Server>, ctx: context.Context) -> Result<(), error> {
+    self.logger.Info("server shutting down")
+    let (timeout_ctx, cancel) = context.WithTimeout(ctx, self.shutdown_timeout)
+    defer cancel()
+    self.srv.Shutdown(timeout_ctx)?
+
+    let mut errs: Slice<error> = []
+    for hook in self.shutdown_hooks {
+      if let Err(e) = hook(timeout_ctx) {
+        errs = errs.append(e)
+      }
+    }
+
+    match errors.Join(errs...) {
+      Some(e) => Err(e),
+      None => Ok(()),
+    }
+  }
+}
